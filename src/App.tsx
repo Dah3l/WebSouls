@@ -5,6 +5,7 @@ import { renderGame } from './game/renderer';
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const gameStateRef = useRef<GameState | null>(null);
   const inputRef = useRef<InputState>({
     keys: new Set(),
@@ -16,29 +17,51 @@ function App() {
     dodgePressed: false,
   });
   const animFrameRef = useRef<number>(0);
+  const canvasSizeRef = useRef({ width: 800, height: 500 });
   const [phase, setPhase] = useState<'menu' | 'playing' | 'dead' | 'victory'>('menu');
   const [deaths, setDeaths] = useState(0);
   const [souls, setSouls] = useState(0);
   const gameStartedRef = useRef(false);
 
+  const resizeCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    
+    canvas.width = width;
+    canvas.height = height;
+    canvasSizeRef.current = { width, height };
+  }, []);
+
   const startGame = useCallback(() => {
+    resizeCanvas();
     gameStateRef.current = createInitialState();
     gameStartedRef.current = true;
     setPhase('playing');
     setDeaths(0);
     setSouls(0);
-  }, []);
+  }, [resizeCanvas]);
 
   const restartGame = useCallback(() => {
     const state = gameStateRef.current;
     const prevDeaths = state ? state.deaths + (state.phase === 'dead' ? 1 : 0) : deaths;
+    resizeCanvas();
     gameStateRef.current = createInitialState();
     gameStateRef.current.deaths = prevDeaths;
     gameStartedRef.current = true;
     setPhase('playing');
     setDeaths(prevDeaths);
     setSouls(0);
-  }, [deaths]);
+  }, [deaths, resizeCanvas]);
+
+  // Resize handler
+  useEffect(() => {
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    return () => window.removeEventListener('resize', resizeCanvas);
+  }, [resizeCanvas]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -46,23 +69,37 @@ function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const clearInput = () => {
+      const input = inputRef.current;
+      input.keys.clear();
+      input.mouseDown = false;
+      input.rightMouseDown = false;
+      input.attackPressed = false;
+      input.dodgePressed = false;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       const input = inputRef.current;
+      const key = e.key;
       
-      if (!input.keys.has(e.key)) {
-        if (e.key === ' ') {
+      // Prevent default for game keys
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Shift'].includes(e.code) || 
+          key === ' ') {
+        e.preventDefault();
+      }
+      
+      if (!input.keys.has(key)) {
+        if (key === ' ' || e.code === 'Space') {
           input.attackPressed = true;
-          e.preventDefault();
         }
-        if (e.key === 'Shift') {
+        if (key === 'Shift' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
           input.dodgePressed = true;
-          e.preventDefault();
         }
       }
       
-      input.keys.add(e.key);
+      input.keys.add(key);
       
-      if (e.key === 'r' || e.key === 'R') {
+      if (key === 'r' || key === 'R') {
         const state = gameStateRef.current;
         if (state && (state.phase === 'dead' || state.phase === 'victory')) {
           restartGame();
@@ -72,6 +109,10 @@ function App() {
 
     const handleKeyUp = (e: KeyboardEvent) => {
       inputRef.current.keys.delete(e.key);
+      // Also delete by code for shift keys
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        inputRef.current.keys.delete('Shift');
+      }
     };
 
     const handleMouseDown = (e: MouseEvent) => {
@@ -100,8 +141,21 @@ function App() {
       e.preventDefault();
     };
 
+    const handleBlur = () => {
+      // Clear all inputs when window loses focus
+      clearInput();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        clearInput();
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     canvas.addEventListener('mousedown', handleMouseDown);
     canvas.addEventListener('mouseup', handleMouseUp);
     canvas.addEventListener('mousemove', handleMouseMove);
@@ -114,13 +168,12 @@ function App() {
       lastTime = currentTime;
 
       const state = gameStateRef.current;
+      const { width, height } = canvasSizeRef.current;
       
       if (state && gameStartedRef.current) {
-        // Always update (for animations, particles, etc.)
         if (state.phase === 'playing') {
           updateGame(state, inputRef.current, deltaTime);
         } else {
-          // Still update particles and animations in dead/victory state
           state.gameTime += deltaTime;
           state.bonfire.animTimer += deltaTime;
           state.particles = state.particles.filter(p => {
@@ -137,7 +190,6 @@ function App() {
           });
         }
         
-        // Sync React state when phase changes
         if (state.phase !== phase) {
           setPhase(state.phase);
           if (state.phase === 'dead') {
@@ -146,12 +198,10 @@ function App() {
           setSouls(state.souls);
         }
 
-        // Render always
-        renderGame(ctx, state, canvas.width, canvas.height);
+        renderGame(ctx, state, width, height);
       } else {
-        // Render menu background on canvas
         ctx.fillStyle = '#0a0a0f';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, width, height);
       }
 
       animFrameRef.current = requestAnimationFrame(gameLoop);
@@ -163,6 +213,8 @@ function App() {
       cancelAnimationFrame(animFrameRef.current);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       canvas.removeEventListener('mousedown', handleMouseDown);
       canvas.removeEventListener('mouseup', handleMouseUp);
       canvas.removeEventListener('mousemove', handleMouseMove);
@@ -171,10 +223,12 @@ function App() {
   }, [phase, restartGame]);
 
   return (
-    <div className="w-full h-screen bg-black flex flex-col items-center justify-center overflow-hidden select-none">
+    <div 
+      ref={containerRef}
+      className="w-full h-screen bg-black overflow-hidden select-none fixed inset-0"
+    >
       {phase === 'menu' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-gradient-to-b from-[#0a0a15] via-[#12121f] to-[#0a0a0f]">
-          {/* Title */}
           <div className="mb-8 text-center">
             <h1 className="text-5xl md:text-7xl font-bold text-[#8b6914] tracking-wider mb-2"
                 style={{ textShadow: '0 0 20px rgba(139, 105, 20, 0.5), 0 4px 8px rgba(0,0,0,0.8)' }}>
@@ -185,7 +239,6 @@ function App() {
             </p>
           </div>
 
-          {/* Bonfire animation */}
           <div className="relative w-20 h-24 mb-8">
             <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-10 h-5 bg-[#444455] rounded-sm"></div>
             <div className="absolute bottom-5 left-1/2 -translate-x-1/2 w-1.5 h-14 bg-[#666677]"></div>
@@ -204,7 +257,6 @@ function App() {
             </div>
           </div>
 
-          {/* Start button */}
           <button
             onClick={startGame}
             className="px-8 py-3 bg-[#1a1a2a] border-2 border-[#8b6914] text-[#ccaa44] font-mono text-lg 
@@ -214,7 +266,6 @@ function App() {
             BEGIN JOURNEY
           </button>
 
-          {/* Controls */}
           <div className="mt-10 text-center text-[#444455] font-mono text-xs space-y-1.5">
             <p className="text-[#666677] mb-3 text-sm">— Controls —</p>
             <p><span className="text-[#888899]">WASD / Arrows</span> — Move</p>
@@ -224,7 +275,6 @@ function App() {
             <p><span className="text-[#888899]">E</span> — Rest at Bonfire</p>
           </div>
 
-          {/* Footer */}
           <div className="absolute bottom-4 text-[#333340] font-mono text-xs">
             Defeat the Fallen King to achieve victory
           </div>
@@ -233,20 +283,15 @@ function App() {
 
       <canvas
         ref={canvasRef}
-        width={800}
-        height={500}
-        className="border border-[#222233] shadow-2xl shadow-black"
+        className="block w-full h-full"
         style={{ 
           imageRendering: 'pixelated',
-          maxWidth: '100vw',
-          maxHeight: '85vh',
           display: phase === 'menu' ? 'none' : 'block',
         }}
       />
 
-      {/* Game Over / Victory overlay buttons */}
       {(phase === 'dead' || phase === 'victory') && (
-        <div className="absolute bottom-16 z-20">
+        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
           <button
             onClick={restartGame}
             className="px-6 py-2 bg-[#1a1a2a] border border-[#8b6914] text-[#ccaa44] font-mono text-sm
